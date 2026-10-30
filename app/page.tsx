@@ -47,9 +47,9 @@ const mono = JetBrains_Mono({ subsets: ["latin"], display: "swap" });
 
 /* Brand tokens. Change --rd-accent (and the soft tint) to recolour everything. */
 const theme = {
-  "--rd-accent": "#C2410C",
-  "--rd-accent-dark": "#9A3412",
-  "--rd-accent-soft": "rgba(194,65,12,0.1)",
+  "--rd-accent": "#1800AD",
+  "--rd-accent-dark": "#13008A",
+  "--rd-accent-soft": "rgba(24,0,173,0.1)",
   "--rd-ink": "#2E2E2E",
   "--rd-canvas": "#F3F0EA",
   "--rd-page": "#E3DFD7",
@@ -276,10 +276,10 @@ function buildReceiptHtml(r: Receipt, rdepLogoSrc: string): string {
 *{margin:0;padding:0;box-sizing:border-box;}
 body{font-family:'Inter',Arial,sans-serif;font-size:14px;color:#2E2E2E;background:#FAF9F7;max-width:780px;margin:0 auto;padding:24px;}
 .bar{display:flex;justify-content:flex-end;margin-bottom:16px;}
-.bar button{background:#C2410C;color:#fff;border:0;border-radius:8px;padding:10px 18px;font:600 13px 'Inter',Arial,sans-serif;cursor:pointer;}
-.head{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;padding-bottom:16px;border-bottom:4px solid #C2410C;margin-bottom:20px;}
+.bar button{background:#1800AD;color:#fff;border:0;border-radius:8px;padding:10px 18px;font:600 13px 'Inter',Arial,sans-serif;cursor:pointer;}
+.head{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;padding-bottom:16px;border-bottom:4px solid #1800AD;margin-bottom:20px;}
 .head img{height:48px;width:auto;}
-.head h1{font-size:26px;color:#C2410C;text-transform:uppercase;letter-spacing:.5px;margin-top:10px;}
+.head h1{font-size:26px;color:#1800AD;text-transform:uppercase;letter-spacing:.5px;margin-top:10px;}
 .meta{text-align:right;font-size:12px;line-height:1.7;}
 .store{background:#F0EEEB;border-left:4px solid #2E2E2E;padding:12px 14px;margin-bottom:20px;font-size:12px;line-height:1.6;color:#666666;}
 .store h2{font-size:15px;color:#2E2E2E;}
@@ -296,7 +296,7 @@ table{width:100%;border-collapse:collapse;}
 .row{display:flex;justify-content:space-between;padding:4px 0;font-size:13px;}
 .tax th{text-align:left;font-size:11px;color:#666666;padding:4px 0;border-bottom:1px solid #E2DED9;}
 .tax th.r{text-align:right;} .tax td{padding:5px 0;font-size:12px;}
-.net{display:flex;justify-content:space-between;align-items:center;margin-top:12px;padding:12px 14px;background:#C2410C;color:#fff;}
+.net{display:flex;justify-content:space-between;align-items:center;margin-top:12px;padding:12px 14px;background:#1800AD;color:#fff;}
 .net span{font-size:14px;text-transform:uppercase;letter-spacing:.6px;font-weight:600;} .net strong{font-size:24px;}
 .pts{margin-top:18px;font-size:12px;color:#666666;}
 .terms{margin-top:26px;padding-top:14px;border-top:1px dashed #E2DED9;font-size:10px;color:#666666;line-height:1.6;}
