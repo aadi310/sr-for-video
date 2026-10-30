@@ -1,11 +1,11 @@
 "use client";
 
 /**
- * RDEP Smart Receipt: generic, fully animated version.
+ * RDEP Smart Receipt: generic, fully animated, Australian (AUD, GST) version.
  *
- * Sections, top to bottom: greeting, rewards (points / profile / coupon), the receipt (purchase
- * details), 2-image banner slider, feedback, refer a friend, reach out, store label, terms +
- * barcode + "Powered by".
+ * Sections, top to bottom: greeting, rewards (points / profile), the receipt (purchase details),
+ * 2-image banner slider, coupons (ticket style), feedback, refer a friend, reach out, store label,
+ * terms + barcode + "Powered by".
  *
  * Animation: every element reveals when it scrolls into view and replays each time it comes back
  * into view (handy for screen-recording one section at a time). Text types in letter by letter,
@@ -47,9 +47,9 @@ const mono = JetBrains_Mono({ subsets: ["latin"], display: "swap" });
 
 /* Brand tokens. Change --rd-accent (and the soft tint) to recolour everything. */
 const theme = {
-  "--rd-accent": "#1800AD",
-  "--rd-accent-dark": "#13008A",
-  "--rd-accent-soft": "rgba(24,0,173,0.1)",
+  "--rd-accent": "#C2410C",
+  "--rd-accent-dark": "#9A3412",
+  "--rd-accent-soft": "rgba(194,65,12,0.1)",
   "--rd-ink": "#2E2E2E",
   "--rd-canvas": "#F3F0EA",
   "--rd-page": "#E3DFD7",
@@ -61,6 +61,7 @@ const theme = {
 /* ------------------------------- config ------------------------------------------ */
 const BRAND = "Urban Loom"; // demo fashion brand
 const PROGRAM = "RDEP Rewards";
+const GST_RATE = 10; // Australian GST, prices are GST-inclusive
 const DEFAULT_RDEP_LOGO = "/images/rdep-logo.png";
 const DEFAULT_FEEDBACK_URL = "https://example.com/feedback";
 
@@ -77,12 +78,23 @@ const RESPECT_REDUCED_MOTION = true;
 export interface ReceiptItem {
   name: string;
   qty: number;
-  mrp: number;
+  /** Recommended retail price (per piece, GST-inclusive) */
+  rrp: number;
+  /** Amount paid for the line, GST-inclusive */
   net: number;
   code: string;
-  hsn: string;
+  colour: string;
   size: string;
   inseam?: string;
+}
+
+export interface Coupon {
+  code: string;
+  /** Big number on the ticket, e.g. "20%" or "$15" */
+  value: string;
+  title: string;
+  detail: string;
+  validTill: string;
 }
 
 export interface Receipt {
@@ -99,10 +111,13 @@ export interface Receipt {
     phone: string;
     timing: string;
     legalName: string;
+    abn: string;
   };
   customer: { firstName: string; mobile: string };
   items: ReceiptItem[];
+  /** Total excluding GST */
   subTotal: number;
+  /** Total paid, including GST */
   netTotal: number;
   pieces: number;
   payments: { mode: string; amount: number }[];
@@ -113,6 +128,7 @@ export interface Receipt {
     expiring: { points: number; on: string };
   };
   rewards: { feedback: number; refer: number; profile: number };
+  coupons: Coupon[];
   contact: {
     tollFree: string;
     hours: string;
@@ -124,10 +140,8 @@ export interface Receipt {
   };
   referral: { code: string; signupUrl: string };
   tax: {
-    lines: { type: "CGST" | "SGST"; rate: number; base: number; amount: number }[];
-    customerGst: string;
-    placeOfSupply: string;
-    reverseCharge: string;
+    lines: { type: "GST"; rate: number; base: number; amount: number }[];
+    state: string;
   };
   terms: { intro: string; list: string[]; note: string };
 }
@@ -160,28 +174,24 @@ export interface RdepReceiptProps {
 
 type IconName =
   | "history" | "mail" | "download" | "star" | "trend" | "gift" | "alert"
-  | "phone" | "close" | "ticket" | "check" | "pin" | "arrow";
-type TabId = "points" | "profile" | "coupon";
+  | "phone" | "close" | "ticket" | "check" | "pin" | "arrow" | "copy";
+type TabId = "points" | "profile";
 type ModalId = "history" | "email" | "tax" | null;
 
 /* ------------------------------- helpers ----------------------------------------- */
-const inr = (n: number): string => n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const fmtInt = (n: number): string => Math.round(n).toLocaleString("en-IN");
-const plus = (n: number): string => `+ ${inr(n)}`;
+const money = (n: number): string => n.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtInt = (n: number): string => Math.round(n).toLocaleString("en-AU");
+const plus = (n: number): string => `+ ${money(n)}`;
 const trim = (n: number): string => String(Number(n.toFixed(2)));
 const round2 = (n: number): number => Math.round(n * 100) / 100;
 
-// Apparel GST slab: 5% up to ₹2,500 per piece, 18% above
-const slabFor = (item: ReceiptItem): number => (item.net / item.qty > 2500 ? 18 : 5);
-
+/** Prices include GST, so the GST part of a line is net - net / 1.1 */
 function derive(item: ReceiptItem) {
-  const rate = slabFor(item);
-  const base = item.net / (1 + rate / 100);
-  const half = rate / 2;
-  const tax = (base * half) / 100;
-  const gross = item.mrp * item.qty;
+  const base = item.net / (1 + GST_RATE / 100);
+  const tax = item.net - base;
+  const gross = item.rrp * item.qty;
   const disc = gross - item.net;
-  return { rate, base, half, tax, discountPct: (disc / gross) * 100, discountAmt: disc };
+  return { rate: GST_RATE, base, tax, discountPct: (disc / gross) * 100, discountAmt: disc };
 }
 
 function seeded(seed: string): () => number {
@@ -202,30 +212,14 @@ function seeded(seed: string): () => number {
 const buildReferralMessage = (code: string, url: string, points: number): string =>
   `Hey, use my referral code *${code}* and join ${PROGRAM} to enjoy exclusive benefits like earning points on every purchase, birthday surprises, special offers & more! Sign up here: ${url} We both earn ${points} reward points once you register successfully. Let's shop together! *T&C apply.`;
 
-/** Groups items by GST slab. Base + CGST + SGST adds up exactly to the items' net amounts. */
+/** One GST line. Sub total + GST adds up exactly to the items' net amounts. */
 function buildTax(items: ReceiptItem[]) {
-  const by = new Map<number, { net: number; base: number }>();
-  items.forEach((item) => {
-    const d = derive(item);
-    const row = by.get(d.rate) ?? { net: 0, base: 0 };
-    row.net += item.net;
-    row.base += d.base;
-    by.set(d.rate, row);
-  });
-  const slabs = [...by.entries()]
-    .sort((a, b) => a[0] - b[0])
-    .map(([rate, v]) => {
-      const base = round2(v.base);
-      const tax = round2(v.net - base);
-      const cgst = round2(tax / 2);
-      return { rate, base, cgst, sgst: round2(tax - cgst) };
-    });
+  const net = items.reduce((a, i) => a + i.net, 0);
+  const base = round2(net / (1 + GST_RATE / 100));
+  const amount = round2(net - base);
   return {
-    subTotal: round2(slabs.reduce((a, x) => a + x.base, 0)),
-    lines: [
-      ...slabs.map((x) => ({ type: "CGST" as const, rate: x.rate / 2, base: x.base, amount: x.cgst })),
-      ...slabs.map((x) => ({ type: "SGST" as const, rate: x.rate / 2, base: x.base, amount: x.sgst })),
-    ],
+    subTotal: base,
+    lines: [{ type: "GST" as const, rate: GST_RATE, base, amount }],
   };
 }
 
@@ -245,29 +239,28 @@ const esc = (s: string): string =>
 /** Standalone, print-ready HTML for one receipt. The "Save as PDF" button inside it opens the print dialog. */
 function buildReceiptHtml(r: Receipt, rdepLogoSrc: string): string {
   const abs = (p: string) => (/^(https?:|data:)/.test(p) ? p : `${window.location.origin}${p}`);
-  const cgst = round2(r.tax.lines.filter((l) => l.type === "CGST").reduce((a, l) => a + l.amount, 0));
-  const sgst = round2(r.tax.lines.filter((l) => l.type === "SGST").reduce((a, l) => a + l.amount, 0));
+  const gst = round2(r.tax.lines.reduce((a, l) => a + l.amount, 0));
 
   const itemRows = r.items
     .map((item) => {
       const d = derive(item);
       return `<tr>
         <td><div class="n">${esc(item.name)}</div>
-          <div class="s">Code ${esc(item.code)} &middot; HSN ${esc(item.hsn)} &middot; Size ${esc(item.size)}${item.inseam ? ` &middot; Inseam ${esc(item.inseam)}` : ""}</div></td>
+          <div class="s">Code ${esc(item.code)} &middot; Colour ${esc(item.colour)} &middot; Size ${esc(item.size)}${item.inseam ? ` &middot; Inseam ${esc(item.inseam)}` : ""}</div></td>
         <td class="r">${item.qty}</td>
-        <td class="r">${inr(item.mrp * item.qty)}</td>
+        <td class="r">${money(item.rrp * item.qty)}</td>
         <td class="r">${trim(d.discountPct)}%</td>
-        <td class="r b">${inr(item.net)}</td>
+        <td class="r b">${money(item.net)}</td>
       </tr>`;
     })
     .join("");
 
   const taxRows = r.tax.lines
-    .map((l) => `<tr><td>${l.type} @ ${l.rate}%</td><td class="r">${inr(l.base)}</td><td class="r">${inr(l.amount)}</td></tr>`)
+    .map((l) => `<tr><td>${l.type} @ ${l.rate}%</td><td class="r">${money(l.base)}</td><td class="r">${money(l.amount)}</td></tr>`)
     .join("");
 
   const payRows = r.payments
-    .map((p) => `<div class="row"><span>${esc(p.mode)}</span><strong>${inr(p.amount)}</strong></div>`)
+    .map((p) => `<div class="row"><span>${esc(p.mode)}</span><strong>${money(p.amount)}</strong></div>`)
     .join("");
 
   const terms = r.terms.list.map((t) => `<li>${esc(t)}</li>`).join("");
@@ -277,16 +270,16 @@ function buildReceiptHtml(r: Receipt, rdepLogoSrc: string): string {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${esc(BRAND)} Receipt ${esc(r.invoiceNo)}</title>
+<title>${esc(BRAND)} Tax Invoice ${esc(r.invoiceNo)}</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 *{margin:0;padding:0;box-sizing:border-box;}
 body{font-family:'Inter',Arial,sans-serif;font-size:14px;color:#2E2E2E;background:#FAF9F7;max-width:780px;margin:0 auto;padding:24px;}
 .bar{display:flex;justify-content:flex-end;margin-bottom:16px;}
-.bar button{background:#1800AD;color:#fff;border:0;border-radius:8px;padding:10px 18px;font:600 13px 'Inter',Arial,sans-serif;cursor:pointer;}
-.head{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;padding-bottom:16px;border-bottom:4px solid #1800AD;margin-bottom:20px;}
+.bar button{background:#C2410C;color:#fff;border:0;border-radius:8px;padding:10px 18px;font:600 13px 'Inter',Arial,sans-serif;cursor:pointer;}
+.head{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;padding-bottom:16px;border-bottom:4px solid #C2410C;margin-bottom:20px;}
 .head img{height:48px;width:auto;}
-.head h1{font-size:26px;color:#1800AD;text-transform:uppercase;letter-spacing:.5px;margin-top:10px;}
+.head h1{font-size:26px;color:#C2410C;text-transform:uppercase;letter-spacing:.5px;margin-top:10px;}
 .meta{text-align:right;font-size:12px;line-height:1.7;}
 .store{background:#F0EEEB;border-left:4px solid #2E2E2E;padding:12px 14px;margin-bottom:20px;font-size:12px;line-height:1.6;color:#666666;}
 .store h2{font-size:15px;color:#2E2E2E;}
@@ -303,7 +296,7 @@ table{width:100%;border-collapse:collapse;}
 .row{display:flex;justify-content:space-between;padding:4px 0;font-size:13px;}
 .tax th{text-align:left;font-size:11px;color:#666666;padding:4px 0;border-bottom:1px solid #E2DED9;}
 .tax th.r{text-align:right;} .tax td{padding:5px 0;font-size:12px;}
-.net{display:flex;justify-content:space-between;align-items:center;margin-top:12px;padding:12px 14px;background:#1800AD;color:#fff;}
+.net{display:flex;justify-content:space-between;align-items:center;margin-top:12px;padding:12px 14px;background:#C2410C;color:#fff;}
 .net span{font-size:14px;text-transform:uppercase;letter-spacing:.6px;font-weight:600;} .net strong{font-size:24px;}
 .pts{margin-top:18px;font-size:12px;color:#666666;}
 .terms{margin-top:26px;padding-top:14px;border-top:1px dashed #E2DED9;font-size:10px;color:#666666;line-height:1.6;}
@@ -334,13 +327,13 @@ table{width:100%;border-collapse:collapse;}
   <h2>${esc(r.store.name)} &ndash; ${esc(r.store.branch)}</h2>
   <div>${esc(r.store.address)}</div>
   <div>Store code ${esc(r.store.code)} &middot; Phone ${esc(r.store.phone)} &middot; ${esc(r.store.timing)}</div>
-  <div>${esc(r.store.legalName)}</div>
+  <div>${esc(r.store.legalName)} &middot; ABN ${esc(r.store.abn)}</div>
 </div>
 
 <div class="cust"><strong>Customer:</strong> ${esc(r.customer.firstName)} &middot; ${esc(r.customer.mobile)}</div>
 
 <table class="items">
-  <thead><tr><th style="width:46%">Item</th><th class="r">Qty</th><th class="r">MRP</th><th class="r">Disc.</th><th class="r">Net amount</th></tr></thead>
+  <thead><tr><th style="width:46%">Item</th><th class="r">Qty</th><th class="r">RRP</th><th class="r">Disc.</th><th class="r">Amount (AUD)</th></tr></thead>
   <tbody>${itemRows}</tbody>
 </table>
 
@@ -351,14 +344,13 @@ table{width:100%;border-collapse:collapse;}
       <thead><tr><th>Tax</th><th class="r">Base amount</th><th class="r">Tax amount</th></tr></thead>
       <tbody>${taxRows}</tbody>
     </table>
-    <div class="pts">Customer GST: ${esc(r.tax.customerGst)} &middot; Place of supply: ${esc(r.tax.placeOfSupply)} &middot; Reverse charge: ${esc(r.tax.reverseCharge)}</div>
+    <div class="pts">All prices include GST &middot; State: ${esc(r.tax.state)}</div>
   </div>
   <div class="col">
     <h3>Summary</h3>
-    <div class="row"><span>Sub total</span><strong>${inr(r.subTotal)}</strong></div>
-    <div class="row"><span>CGST</span><strong>+ ${inr(cgst)}</strong></div>
-    <div class="row"><span>SGST</span><strong>+ ${inr(sgst)}</strong></div>
-    <div class="net"><span>Net total</span><strong>&#8377;${inr(r.netTotal)}</strong></div>
+    <div class="row"><span>Sub total (ex GST)</span><strong>${money(r.subTotal)}</strong></div>
+    <div class="row"><span>GST</span><strong>+ ${money(gst)}</strong></div>
+    <div class="net"><span>Total (inc GST)</span><strong>$${money(r.netTotal)}</strong></div>
     <div class="row" style="margin-top:8px"><span>Pieces purchased</span><strong>${r.pieces}</strong></div>
     <h3 style="margin-top:16px">Payment</h3>
     ${payRows}
@@ -371,7 +363,7 @@ table{width:100%;border-collapse:collapse;}
   <strong>Terms and conditions</strong>
   <p>${esc(r.terms.intro)}</p>
   <ol>${terms}</ol>
-  <p>Customer toll free no- ${esc(r.contact.tollFree)}, ${esc(r.contact.hours)} &middot; Email &ndash; ${esc(r.contact.email)}</p>
+  <p>Customer care (free call): ${esc(r.contact.tollFree)}, ${esc(r.contact.hours)} &middot; Email &ndash; ${esc(r.contact.email)}</p>
   <p>${esc(r.terms.note)}</p>
 </div>
 
@@ -396,62 +388,69 @@ function downloadReceipt(r: Receipt, rdepLogoSrc: string) {
  * Sample data (all fictional). Replace with the real API response.
  * -------------------------------------------------------------------------------- */
 const SAMPLE_COMMON = {
-  customer: { firstName: "Aarav", mobile: "9876543210" },
+  customer: { firstName: "Liam", mobile: "0412 345 678" },
   rewards: { feedback: 50, refer: 100, profile: 50 },
+  coupons: [
+    { code: "LOOM20", value: "20%", title: "Next purchase", detail: "Min. spend $100. In store only.", validTill: "31 Dec 2026" },
+    { code: "RDEP15", value: "$15", title: "Welcome back", detail: "Min. spend $75. In store and online.", validTill: "15 Jan 2027" },
+  ] as Coupon[],
   contact: {
-    tollFree: "1800 000 0000",
-    hours: "Mon-Sat, 10AM to 6 PM",
+    tollFree: "1800 555 012",
+    hours: "Mon-Fri, 9AM to 5PM AEST",
     email: "care@urbanloom.example",
-    callTo: "+918000000000",
+    callTo: "1800555012",
     writeTo: "care@urbanloom.example",
   },
   referral: { code: "RDEP7XQ2LM", signupUrl: "https://rdep.io" },
   terms: {
-    intro: `We hope you love your ${BRAND} purchase. If you are not satisfied, present this invoice and exchange the product within 14 days from the date of purchase*. Subject to the terms and conditions below, products can only be exchanged and under no circumstances can any amount be refunded.`,
+    intro: `We hope you love your ${BRAND} purchase. If you change your mind, present this tax invoice and exchange the product within 30 days of purchase*, subject to the conditions below. Nothing in this policy limits your rights under the Australian Consumer Law.`,
     list: [
-      "Products may be exchanged only if returned in saleable condition, as decided by the store.",
-      "A product can be exchanged with another product of the same or higher value, with the price difference paid by the customer.",
-      "All hang tags, price tags and labels must be intact when requesting an exchange.",
-      "Products purchased during the End of Season sale cannot be exchanged.",
-      "Accessories and innerwear cannot be exchanged.",
-      `Products can be exchanged at any ${BRAND} store in India.`,
-      "Personalised, customised or altered products cannot be exchanged.",
+      "Change-of-mind exchanges must be made within 30 days of purchase with this tax invoice.",
+      "Products must be unworn, unwashed and in saleable condition with all tags attached.",
+      "Exchanges are for products of the same or higher value, with any price difference paid by the customer.",
+      "Products bought in a clearance sale can be exchanged but not refunded.",
+      "Accessories and innerwear cannot be exchanged for change of mind.",
+      `Products can be exchanged at any ${BRAND} store in Australia.`,
+      "Personalised, customised or altered products cannot be exchanged for change of mind.",
       "Please follow the care instructions on the label.",
-      "This policy is subject to applicable laws, regulations and government notifications issued from time to time.",
-      `${PROGRAM} members may exchange any product within 30 days from the date of purchase.`,
+      "Faulty products will be repaired, replaced or refunded in line with the Australian Consumer Law.",
+      `${PROGRAM} members get an extended 45-day exchange window.`,
     ],
-    note: "Note: Any disputes will be subject to the exclusive jurisdiction of the courts in Bengaluru, Karnataka.",
+    note: "Note: This policy is governed by the laws of New South Wales, Australia.",
   },
 };
 
-const STORE_INDIRANAGAR: Receipt["store"] = {
+const STORE_SURRY_HILLS: Receipt["store"] = {
   name: `${BRAND} Store`,
-  branch: "Indiranagar, Bengaluru",
-  address: "No. 24, 12th Main Rd, HAL 2nd Stage, Indiranagar, Bengaluru, Karnataka 560038",
-  code: "UL-BLR-0012",
-  phone: "08041234567",
-  timing: "10:00 AM to 10:00 PM",
-  legalName: "URBAN LOOM RETAIL PRIVATE LIMITED",
+  branch: "Surry Hills, Sydney",
+  address: "Shop 3, 412 Crown St, Surry Hills NSW 2010",
+  code: "UL-SYD-0012",
+  phone: "0255501234",
+  timing: "9:00 AM to 6:00 PM",
+  legalName: "URBAN LOOM RETAIL PTY LTD",
+  abn: "12 345 678 901",
 };
 
-const STORE_KORAMANGALA: Receipt["store"] = {
+const STORE_FITZROY: Receipt["store"] = {
   name: `${BRAND} Store`,
-  branch: "Koramangala, Bengaluru",
-  address: "No. 7, 80 Feet Rd, 4th Block, Koramangala, Bengaluru, Karnataka 560034",
-  code: "UL-BLR-0027",
-  phone: "08049876543",
-  timing: "11:00 AM to 10:00 PM",
-  legalName: "URBAN LOOM RETAIL PRIVATE LIMITED",
+  branch: "Fitzroy, Melbourne",
+  address: "86 Brunswick St, Fitzroy VIC 3065",
+  code: "UL-MEL-0027",
+  phone: "0355501234",
+  timing: "10:00 AM to 6:00 PM",
+  legalName: "URBAN LOOM RETAIL PTY LTD",
+  abn: "12 345 678 901",
 };
 
-const STORE_WHITEFIELD: Receipt["store"] = {
+const STORE_VALLEY: Receipt["store"] = {
   name: `${BRAND} Store`,
-  branch: "Whitefield, Bengaluru",
-  address: "Shop 18, ITPL Main Rd, Whitefield, Bengaluru, Karnataka 560066",
-  code: "UL-BLR-0041",
-  phone: "08045671234",
-  timing: "10:30 AM to 9:30 PM",
-  legalName: "URBAN LOOM RETAIL PRIVATE LIMITED",
+  branch: "Fortitude Valley, Brisbane",
+  address: "Shop 11, 245 Brunswick St, Fortitude Valley QLD 4006",
+  code: "UL-BNE-0041",
+  phone: "0755501234",
+  timing: "9:30 AM to 5:30 PM",
+  legalName: "URBAN LOOM RETAIL PTY LTD",
+  abn: "12 345 678 901",
 };
 
 function makeReceipt(o: {
@@ -460,6 +459,7 @@ function makeReceipt(o: {
   date: string;
   cashier: string;
   store: Receipt["store"];
+  state: string;
   items: ReceiptItem[];
   payments: Receipt["payments"];
   points: Receipt["points"];
@@ -478,7 +478,7 @@ function makeReceipt(o: {
     pieces: o.items.reduce((s, i) => s + i.qty, 0),
     payments: o.payments,
     points: o.points,
-    tax: { lines: tax.lines, customerGst: "Unregistered", placeOfSupply: "Karnataka", reverseCharge: "No" },
+    tax: { lines: tax.lines, state: o.state },
   };
 }
 
@@ -486,42 +486,45 @@ export const sampleReceipts: Receipt[] = [
   makeReceipt({
     invoiceNo: "1042",
     receiptId: "202610280012001042",
-    date: "28-10-2026 19:42:10",
+    date: "28-10-2026 14:42:10",
     cashier: "UL2047",
-    store: STORE_INDIRANAGAR,
+    store: STORE_SURRY_HILLS,
+    state: "New South Wales",
     items: [
-      { name: "Relaxed Linen Shirt - Sage", qty: 1, mrp: 2799, net: 2379.15, code: "UL240118M", hsn: "62052000", size: "M" },
-      { name: "Pleated Wide-Leg Trousers - Ecru", qty: 1, mrp: 3499, net: 2974.15, code: "UL310562", hsn: "62046200", size: "30", inseam: "30" },
-      { name: "Organic Cotton Crew Tee - Charcoal", qty: 1, mrp: 1299, net: 1104.15, code: "UL180934L", hsn: "61091000", size: "L" },
+      { name: "Relaxed Linen Shirt - Sage", qty: 1, rrp: 129.95, net: 110.46, code: "UL240118", colour: "Sage", size: "M" },
+      { name: "Pleated Wide-Leg Trousers - Ecru", qty: 1, rrp: 159.95, net: 135.96, code: "UL310562", colour: "Ecru", size: "10", inseam: "30" },
+      { name: "Organic Cotton Crew Tee - Charcoal", qty: 1, rrp: 59.95, net: 50.96, code: "UL180934", colour: "Charcoal", size: "L" },
     ],
     payments: [
-      { mode: "CARD", amount: 4457.45 },
-      { mode: "UPI", amount: 2000 },
+      { mode: "CARD", amount: 197.38 },
+      { mode: "GIFT CARD", amount: 100 },
     ],
-    points: { available: 2140, earned: 645, redeemed: 0, expiring: { points: 820, on: "15 Jan 2027" } },
+    points: { available: 1240, earned: 297, redeemed: 0, expiring: { points: 420, on: "15 Jan 2027" } },
   }),
   makeReceipt({
     invoiceNo: "0987",
     receiptId: "202609140027000987",
     date: "14-09-2026 12:18:45",
     cashier: "UL2051",
-    store: STORE_KORAMANGALA,
+    store: STORE_FITZROY,
+    state: "Victoria",
     items: [
-      { name: "Heritage Block-Print Kurta - Indigo", qty: 1, mrp: 2299, net: 1954.15, code: "UL420771M", hsn: "62044200", size: "M" },
-      { name: "Everyday Denim Jacket - Washed Blue", qty: 1, mrp: 4599, net: 3909.15, code: "UL550209", hsn: "62034200", size: "L" },
+      { name: "Heritage Block-Print Shirt - Indigo", qty: 1, rrp: 119.95, net: 101.96, code: "UL420771", colour: "Indigo", size: "M" },
+      { name: "Everyday Denim Jacket - Washed Blue", qty: 1, rrp: 219.95, net: 186.96, code: "UL550209", colour: "Washed Blue", size: "L" },
     ],
-    payments: [{ mode: "UPI", amount: 5863.3 }],
-    points: { available: 1495, earned: 586, redeemed: 0, expiring: { points: 600, on: "30 Dec 2026" } },
+    payments: [{ mode: "CARD", amount: 288.92 }],
+    points: { available: 943, earned: 289, redeemed: 0, expiring: { points: 300, on: "30 Dec 2026" } },
   }),
   makeReceipt({
     invoiceNo: "0931",
     receiptId: "202608020041000931",
     date: "02-08-2026 16:05:09",
     cashier: "UL3012",
-    store: STORE_WHITEFIELD,
-    items: [{ name: "Cashmere Blend Scarf - Camel", qty: 1, mrp: 1999, net: 1699.15, code: "UL730415", hsn: "61178090", size: "Free" }],
-    payments: [{ mode: "CARD", amount: 1699.15 }],
-    points: { available: 909, earned: 170, redeemed: 0, expiring: { points: 450, on: "05 Dec 2026" } },
+    store: STORE_VALLEY,
+    state: "Queensland",
+    items: [{ name: "Merino Blend Scarf - Camel", qty: 1, rrp: 89.95, net: 76.46, code: "UL730415", colour: "Camel", size: "One size" }],
+    payments: [{ mode: "CARD", amount: 76.46 }],
+    points: { available: 654, earned: 76, redeemed: 0, expiring: { points: 250, on: "05 Dec 2026" } },
   }),
 ];
 
@@ -583,6 +586,12 @@ const PATHS: Record<IconName, ReactNode> = {
   ),
   check: <path d="m5 12 5 5 9-10" />,
   arrow: <path d="M5 12h14M13 6l6 6-6 6" />,
+  copy: (
+    <>
+      <rect x="9" y="9" width="11" height="11" rx="2" />
+      <path d="M5 15V6a2 2 0 0 1 2-2h9" />
+    </>
+  ),
   pin: (
     <>
       <path d="M20 10c0 6-8 12-8 12S4 16 4 10a8 8 0 0 1 16 0Z" />
@@ -1076,11 +1085,11 @@ function PaperItem({ item, index, open, onToggle }: { item: ReceiptItem; index: 
         <span className="min-w-0">
           <span className={`${m} block text-[13px] font-semibold uppercase leading-snug`}>{item.name}</span>
           <span className={`${m} mt-1 block text-xs text-[var(--rd-gray)]`}>
-            QTY {item.qty} &nbsp; MRP {item.mrp.toLocaleString("en-IN")}
+            QTY {item.qty} &nbsp; RRP {money(item.rrp)}
           </span>
         </span>
         <span className={`${m} text-sm font-bold leading-snug tabular-nums`}>
-          <CountUp to={item.net} format={inr} d={delay + 150} />
+          <CountUp to={item.net} format={money} d={delay + 150} />
         </span>
       </button>
 
@@ -1091,18 +1100,17 @@ function PaperItem({ item, index, open, onToggle }: { item: ReceiptItem; index: 
             <dd className="text-[13px] font-bold tracking-wide">{item.code}</dd>
           </dl>
 
-          <dl className="grid grid-cols-4 divide-x divide-black/15 rounded-md border border-black/15">
+          <dl className="grid grid-cols-3 divide-x divide-black/15 rounded-md border border-black/15">
             {(
               [
-                ["HSN", item.hsn],
-                ["UoM", "Pcs"],
+                ["Colour", item.colour],
                 ["Size", item.size],
                 ["Inseam", item.inseam ?? "-"],
               ] as [string, string][]
             ).map(([k, v]) => (
               <div key={k} className="min-w-0 px-1.5 py-1.5">
                 <dt className="text-[var(--rd-gray)]">{k}</dt>
-                <dd className="mt-0.5 font-bold tabular-nums">{v}</dd>
+                <dd className="mt-0.5 break-words font-bold">{v}</dd>
               </div>
             ))}
           </dl>
@@ -1134,14 +1142,12 @@ function PaperItem({ item, index, open, onToggle }: { item: ReceiptItem; index: 
               </tr>
             </thead>
             <tbody className="border-t border-black/15">
-              {(["SGST", "CGST"] as const).map((t) => (
-                <tr key={t} className="border-b border-black/10 last:border-b-0">
-                  <td className="py-1.5 font-bold">{t}</td>
-                  <td className="py-1.5 text-right">{trim(d.half)}</td>
-                  <td className="py-1.5 text-right">{trim(d.base)}</td>
-                  <td className="py-1.5 text-right font-bold">{trim(d.tax)}</td>
-                </tr>
-              ))}
+              <tr>
+                <td className="py-1.5 font-bold">GST</td>
+                <td className="py-1.5 text-right">{d.rate}</td>
+                <td className="py-1.5 text-right">{trim(d.base)}</td>
+                <td className="py-1.5 text-right font-bold">{trim(d.tax)}</td>
+              </tr>
             </tbody>
           </table>
         </div>
@@ -1318,11 +1324,102 @@ function BannerSlider() {
   );
 }
 
+/* ----------------------------- coupons (ticket style) ---------------------------- */
+/** A ticket: value + details on a white body, perforated edge with two notches, and a coloured
+ *  stub that copies the code when tapped. */
+function CouponTicket({ coupon, index }: { coupon: Coupon; index: number }) {
+  const [copied, setCopied] = useState(false);
+  const timer = useRef(0);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+  const d = index * 220;
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(coupon.code);
+    } catch {
+      /* clipboard blocked: still show the confirmation */
+    }
+    setCopied(true);
+    window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => setCopied(false), 1800);
+  };
+
+  return (
+    <Reveal v="up" d={d}>
+      <div className={`rd-shine flex rounded-2xl bg-white ${lift}`}>
+        <div className="flex min-w-0 flex-1 items-center gap-4 p-5">
+          <div className="shrink-0 text-center text-[var(--rd-accent)]">
+            <Reveal as="span" v="pop" d={d + 250} className={`${display.className} block text-[44px] leading-[0.9] tabular-nums`}>
+              {coupon.value}
+            </Reveal>
+            <span className={`${display.className} mt-1 block text-lg leading-none tracking-[0.18em]`}>OFF</span>
+          </div>
+          <div className="min-w-0">
+            <Reveal as="p" v="left" d={d + 350} className={`${display.className} text-xl uppercase leading-none tracking-wide`}>
+              {coupon.title}
+            </Reveal>
+            <Reveal as="p" v="up" d={d + 500} className="mt-1.5 text-[13px] leading-snug text-[var(--rd-gray)]">
+              {coupon.detail}
+            </Reveal>
+            <Reveal as="p" v="fade" d={d + 650} className={`${mono.className} mt-2 text-xs font-semibold`}>
+              Valid till {coupon.validTill}
+            </Reveal>
+          </div>
+        </div>
+
+        <button
+          type="button"
+          onClick={copy}
+          aria-label={`Copy coupon code ${coupon.code}`}
+          className={`relative flex w-[108px] shrink-0 flex-col items-center justify-center gap-1.5 border-l-2 border-dashed border-white/60 bg-[var(--rd-accent)] px-2 py-4 text-white transition-colors active:bg-[var(--rd-accent-dark)] [@media(hover:hover)]:hover:bg-[var(--rd-accent-dark)] motion-reduce:transition-none ${onAccent}`}
+        >
+          {/* the two notches that make it look like a torn ticket */}
+          <span aria-hidden="true" className="absolute -left-[13px] -top-3 h-6 w-6 rounded-full bg-[var(--rd-canvas)]" />
+          <span aria-hidden="true" className="absolute -bottom-3 -left-[13px] h-6 w-6 rounded-full bg-[var(--rd-canvas)]" />
+          <Icon name={copied ? "check" : "copy"} className="h-5 w-5" />
+          <span className={`${mono.className} text-[13px] font-bold tracking-wider`}>{coupon.code}</span>
+          <span aria-live="polite" className="text-[11px] font-bold uppercase tracking-wide">
+            {copied ? "Copied!" : "Tap to copy"}
+          </span>
+        </button>
+      </div>
+    </Reveal>
+  );
+}
+
+function CouponSection({ coupons }: { coupons: Coupon[] }) {
+  return (
+    <section aria-label="Coupons">
+      <h2 className={`${display.className} text-[28px] uppercase leading-none tracking-wide`}>
+        <SplitText text="Your coupons" step={34} />
+      </h2>
+      <div className="mt-5 space-y-4">
+        {coupons.length === 0 ? (
+          <Reveal v="zoom" className="flex flex-col items-center rounded-3xl border-2 border-dashed border-black/25 bg-white px-6 py-10 text-center">
+            <Reveal v="pop" d={200}>
+              <span className="rd-float block text-[var(--rd-accent)]">
+                <Icon name="ticket" className="h-10 w-10" />
+              </span>
+            </Reveal>
+            <p className={`${display.className} mt-3 text-[26px] uppercase leading-none tracking-wide`}>
+              <SplitText text="No coupons available." step={30} d={350} />
+            </p>
+            <Reveal as="p" v="up" d={900} className="mt-2 text-[15px] text-[var(--rd-gray)]">
+              Please check this section later.
+            </Reveal>
+          </Reveal>
+        ) : (
+          coupons.map((c, i) => <CouponTicket key={c.code} coupon={c} index={i} />)
+        )}
+      </div>
+    </section>
+  );
+}
+
 /* ----------------------------- rewards tabs section ------------------------------ */
 const TABS: { id: TabId; lines: [string, string] }[] = [
   { id: "points", lines: ["My Reward", "Points"] },
   { id: "profile", lines: ["Update", "Profile"] },
-  { id: "coupon", lines: ["Available", "Coupon"] },
 ];
 
 function RewardsSection({ data, onUpdateProfile }: { data: Receipt; onUpdateProfile?: (values: ProfileForm) => void }) {
@@ -1337,7 +1434,7 @@ function RewardsSection({ data, onUpdateProfile }: { data: Receipt; onUpdateProf
 
   return (
     <section aria-label={PROGRAM} className="text-[var(--rd-ink)]">
-      <div role="tablist" aria-label={PROGRAM} className="grid grid-cols-3 gap-4 border-b-2 border-black/10">
+      <div role="tablist" aria-label={PROGRAM} className="grid grid-cols-2 gap-4 border-b-2 border-black/10">
         {TABS.map((t, i) => {
           const active = tab === t.id;
           return (
@@ -1473,25 +1570,6 @@ function RewardsSection({ data, onUpdateProfile }: { data: Receipt; onUpdateProf
             </form>
           </Reveal>
         )}
-
-        {tab === "coupon" && (
-          <Reveal
-            v="zoom"
-            className="flex flex-col items-center rounded-3xl border-2 border-dashed border-black/25 bg-white px-6 py-12 text-center"
-          >
-            <Reveal v="pop" d={200}>
-              <span className="rd-float block text-[var(--rd-accent)]">
-                <Icon name="ticket" className="h-10 w-10" />
-              </span>
-            </Reveal>
-            <p className={`${display.className} mt-3 text-[26px] uppercase leading-none tracking-wide`}>
-              <SplitText text="No coupons available." step={30} d={350} />
-            </p>
-            <Reveal as="p" v="up" d={900} className="mt-2 text-[15px] text-[var(--rd-gray)]">
-              Please check this section later.
-            </Reveal>
-          </Reveal>
-        )}
       </div>
     </section>
   );
@@ -1534,11 +1612,7 @@ function ReceiptView({
   const whatsappHref = `https://wa.me/?text=${encodeURIComponent(buildReferralMessage(referral.code, referral.signupUrl, rewards.refer))}`;
   const m = mono.className;
 
-  const taxTotals = useMemo(() => {
-    const sum = (t: "CGST" | "SGST") =>
-      round2(data.tax.lines.filter((l) => l.type === t).reduce((acc, l) => acc + l.amount, 0));
-    return { cgst: sum("CGST"), sgst: sum("SGST") };
-  }, [data.tax.lines]);
+  const gstTotal = useMemo(() => round2(data.tax.lines.reduce((acc, l) => acc + l.amount, 0)), [data.tax.lines]);
 
   const handleDownload = () => (onDownloadPdf ? onDownloadPdf(data) : downloadReceipt(data, rdepLogoSrc));
 
@@ -1613,7 +1687,7 @@ function ReceiptView({
               className={`${m} mt-4 flex justify-between border-y-2 border-[var(--rd-ink)] py-2 text-xs font-semibold uppercase tracking-wide`}
             >
               <span>Item name</span>
-              <span>Net amount</span>
+              <span>Amount (AUD)</span>
             </Reveal>
             <ul aria-label="Items purchased">
               {data.items.map((item, i) => (
@@ -1622,18 +1696,17 @@ function ReceiptView({
             </ul>
 
             <dl className={`${m} space-y-2 border-t-2 border-[var(--rd-ink)] pt-3.5 text-sm`}>
-              <Leader label="Sub total" value={<CountUp to={data.subTotal} format={inr} />} strong />
-              <Leader label="CGST" value={<CountUp to={taxTotals.cgst} format={plus} d={120} />} strong d={120} />
-              <Leader label="SGST" value={<CountUp to={taxTotals.sgst} format={plus} d={240} />} strong d={240} />
+              <Leader label="Sub total (ex GST)" value={<CountUp to={data.subTotal} format={money} />} strong />
+              <Leader label="GST (10%)" value={<CountUp to={gstTotal} format={plus} d={120} />} strong d={120} />
             </dl>
 
             <Reveal v="zoom" className="mt-3.5 border-y-2 border-[var(--rd-ink)] py-3.5">
               <div className="flex flex-wrap items-end justify-between gap-x-3 gap-y-1">
                 <span className={`${display.className} text-xl uppercase leading-none tracking-wide`}>
-                  <SplitText text="Net total" step={45} d={150} />
+                  <SplitText text="Total" step={45} d={150} />
                 </span>
                 <span className={`${display.className} text-[44px] leading-none tabular-nums text-[var(--rd-accent)]`}>
-                  ₹<CountUp to={data.netTotal} format={inr} d={250} dur={1800} />
+                  $<CountUp to={data.netTotal} format={money} d={250} dur={1800} />
                 </span>
               </div>
             </Reveal>
@@ -1661,7 +1734,7 @@ function ReceiptView({
             </h3>
             <dl className={`${m} mt-3 space-y-2 text-sm`}>
               {data.payments.map((p, i) => (
-                <Leader key={p.mode} label={p.mode} value={<CountUp to={p.amount} format={inr} d={i * 120} />} strong d={i * 120} />
+                <Leader key={p.mode} label={p.mode} value={<CountUp to={p.amount} format={money} d={i * 120} />} strong d={i * 120} />
               ))}
             </dl>
 
@@ -1692,6 +1765,8 @@ function ReceiptView({
         {/* ---------- Below the purchase details ---------- */}
         <div className="space-y-7 px-4 pt-8">
           <BannerSlider />
+
+          <CouponSection coupons={data.coupons} />
 
           <Reveal v="up">
             <FeedbackLink href={feedbackUrl} points={rewards.feedback} onClick={onFeedbackClick} />
@@ -1799,6 +1874,7 @@ function ReceiptView({
                       d={120}
                     />
                     <Leader label="Store timing" value={store.timing} strong d={240} />
+                    <Leader label="ABN" value={store.abn} strong d={360} />
                   </dl>
                 </Collapse>
 
@@ -1845,7 +1921,7 @@ function ReceiptView({
                   ))}
                 </ol>
                 <Reveal as="p" v="up">
-                  Customer toll free no- {contact.tollFree}, {contact.hours}
+                  Customer care (free call): {contact.tollFree}, {contact.hours}
                 </Reveal>
                 <Reveal as="p" v="up">
                   Email – {contact.email}
@@ -1912,7 +1988,7 @@ function ReceiptView({
                   </span>
                   <span className="flex shrink-0 items-center gap-2">
                     <span className="text-right">
-                      <span className={`${m} block text-base font-bold tabular-nums`}>₹{inr(h.amount)}</span>
+                      <span className={`${m} block text-base font-bold tabular-nums`}>${money(h.amount)}</span>
                       {h.current && (
                         <span className="mt-1 inline-block rounded-full bg-[var(--rd-accent)] px-2.5 py-0.5 text-xs font-bold text-white">This receipt</span>
                       )}
@@ -1982,18 +2058,18 @@ function ReceiptView({
                   <td className="py-3 font-bold">
                     {l.type} @ {l.rate}%
                   </td>
-                  <td className="py-3 text-right">{inr(l.base)}</td>
-                  <td className="py-3 text-right">{inr(l.amount)}</td>
+                  <td className="py-3 text-right">{money(l.base)}</td>
+                  <td className="py-3 text-right">{money(l.amount)}</td>
                 </Reveal>
               ))}
             </tbody>
             <tfoot>
               <tr className="font-bold">
                 <td className="pt-3" colSpan={2}>
-                  Total tax
+                  Total GST
                 </td>
                 <td className="pt-3 text-right">
-                  <CountUp to={taxTotals.cgst + taxTotals.sgst} format={inr} d={700} />
+                  <CountUp to={gstTotal} format={money} d={600} />
                 </td>
               </tr>
             </tfoot>
@@ -2001,9 +2077,9 @@ function ReceiptView({
 
           <dl className="mt-5 space-y-3 rounded-2xl bg-[var(--rd-wash)] p-4 text-sm">
             {[
-              ["Customer GST Registered/Unregistered", data.tax.customerGst],
-              ["Place of supply", data.tax.placeOfSupply],
-              ["Whether the tax is payable on Reverse Charge Basis", data.tax.reverseCharge],
+              ["Store ABN", store.abn],
+              ["State", data.tax.state],
+              ["Prices include GST", "Yes"],
             ].map(([k, v], i) => (
               <Reveal key={k} v="left" d={600 + i * 120} className="flex items-baseline justify-between gap-4">
                 <dt className="text-[var(--rd-gray)]">{k}</dt>
@@ -2013,9 +2089,9 @@ function ReceiptView({
           </dl>
 
           <Reveal v="zoom" d={1000} className="rd-shine mt-5 flex items-end justify-between gap-3 rounded-2xl bg-[var(--rd-accent)] px-4 py-3.5 text-white">
-            <span className={`${display.className} text-xl uppercase leading-none tracking-wide`}>Net total</span>
+            <span className={`${display.className} text-xl uppercase leading-none tracking-wide`}>Total</span>
             <span className={`${display.className} text-4xl leading-none tabular-nums`}>
-              ₹<CountUp to={data.netTotal} format={inr} d={1100} dur={1600} />
+              $<CountUp to={data.netTotal} format={money} d={1100} dur={1600} />
             </span>
           </Reveal>
         </Modal>
